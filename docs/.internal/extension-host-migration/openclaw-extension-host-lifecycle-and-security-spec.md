@@ -48,6 +48,7 @@ What has been implemented:
 - CLI duplicate detection, registrar invocation, and async failure logging now delegate through `src/extension-host/cli-lifecycle.ts`
 - gateway method-id aggregation, plugin diagnostic shaping, and extra-handler composition now delegate through `src/extension-host/gateway-methods.ts`
 - plugin tool resolution, conflict handling, optional-tool gating, and plugin-tool metadata tracking now delegate through `src/extension-host/tool-runtime.ts`
+- plugin provider projection from registry entries into runtime provider objects now delegates through `src/extension-host/provider-runtime.ts`
 - loader alias-wired module loader creation now routes through `src/extension-host/loader-module-loader.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
 - loader lazy runtime proxy creation now routes through `src/extension-host/loader-runtime-proxy.ts`
@@ -116,6 +117,7 @@ How it has been implemented:
 - by extracting CLI duplicate detection, registrar invocation, and async failure logging into a host-owned CLI-lifecycle helper while `src/plugins/cli.ts` remains the compatibility entry point
 - by extracting gateway method-id aggregation, plugin diagnostic shaping, and extra-handler composition into a host-owned gateway-methods helper while request dispatch semantics remain in the gateway server code
 - by extracting plugin tool resolution, conflict handling, optional-tool gating, and plugin-tool metadata tracking into a host-owned tool-runtime helper while `src/plugins/tools.ts` remains the loader and config-normalization facade
+- by extracting provider projection from registry entries into runtime provider objects into a host-owned provider-runtime helper while `src/plugins/providers.ts` remains the loader and config-normalization facade
 
 What is still pending from this spec:
 
