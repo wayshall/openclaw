@@ -5,7 +5,7 @@ import type { MatrixAuth } from "../client/types.js";
 import { LogService } from "../sdk/logger.js";
 
 const INBOUND_DEDUPE_FILENAME = "inbound-dedupe.json";
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 const DEFAULT_MAX_ENTRIES = 20_000;
 const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PERSIST_DEBOUNCE_MS = 250;
@@ -18,17 +18,34 @@ type StoredMatrixInboundDedupeEntry = {
 type StoredMatrixInboundDedupeState = {
   version: number;
   entries: StoredMatrixInboundDedupeEntry[];
+  roomWatermarks?: StoredMatrixInboundRoomWatermark[];
+};
+
+type StoredMatrixInboundRoomWatermark = {
+  roomId: string;
+  eventTs: number;
+  eventId?: string;
+};
+
+type MatrixInboundRoomWatermark = {
+  eventTs: number;
+  eventId?: string;
 };
 
 export type MatrixInboundEventDeduper = {
   claimEvent: (params: { roomId: string; eventId: string }) => boolean;
-  commitEvent: (params: { roomId: string; eventId: string }) => Promise<void>;
+  commitEvent: (params: { roomId: string; eventId: string; eventTs?: number }) => Promise<void>;
   releaseEvent: (params: { roomId: string; eventId: string }) => void;
+  isOlderThanCommittedWatermark: (params: { roomId: string; eventTs: number }) => boolean;
   flush: () => Promise<void>;
   stop: () => Promise<void>;
 };
 
 function normalizeEventPart(value: string): string {
+  return value.trim();
+}
+
+function normalizeRoomId(value: string): string {
   return value.trim();
 }
 
@@ -56,6 +73,18 @@ function normalizeTimestamp(raw: unknown): number | null {
     return null;
   }
   return Math.max(0, Math.floor(raw));
+}
+
+function normalizeEventTimestamp(raw: unknown): number | null {
+  return normalizeTimestamp(raw);
+}
+
+function normalizeOptionalEventId(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const value = normalizeEventPart(raw);
+  return value || undefined;
 }
 
 function pruneSeenEvents(params: {
@@ -89,6 +118,7 @@ function pruneSeenEvents(params: {
 
 function toStoredState(params: {
   seen: Map<string, number>;
+  roomWatermarks: Map<string, MatrixInboundRoomWatermark>;
   ttlMs: number;
   maxEntries: number;
   nowMs: number;
@@ -97,6 +127,11 @@ function toStoredState(params: {
   return {
     version: STORE_VERSION,
     entries: Array.from(params.seen.entries()).map(([key, ts]) => ({ key, ts })),
+    roomWatermarks: Array.from(params.roomWatermarks.entries()).map(([roomId, watermark]) => ({
+      roomId,
+      eventTs: watermark.eventTs,
+      ...(watermark.eventId ? { eventId: watermark.eventId } : {}),
+    })),
   };
 }
 
@@ -107,10 +142,57 @@ async function readStoredState(
     storagePath,
     null,
   );
-  if (value?.version !== STORE_VERSION || !Array.isArray(value.entries)) {
+  if (
+    !value ||
+    (value.version !== 1 && value.version !== STORE_VERSION) ||
+    !Array.isArray(value.entries)
+  ) {
     return null;
   }
-  return value;
+  return {
+    version: value.version,
+    entries: value.entries,
+    roomWatermarks: Array.isArray(value.roomWatermarks) ? value.roomWatermarks : [],
+  };
+}
+
+function updateRoomWatermark(params: {
+  roomWatermarks: Map<string, MatrixInboundRoomWatermark>;
+  roomId: string;
+  eventTs?: number;
+  eventId?: string;
+}): void {
+  const roomId = normalizeRoomId(params.roomId);
+  const eventTs = normalizeEventTimestamp(params.eventTs);
+  if (!roomId || eventTs === null) {
+    return;
+  }
+  const nextEventId = normalizeOptionalEventId(params.eventId);
+  const current = params.roomWatermarks.get(roomId);
+  if (!current || eventTs > current.eventTs) {
+    params.roomWatermarks.set(roomId, {
+      eventTs,
+      ...(nextEventId ? { eventId: nextEventId } : {}),
+    });
+    return;
+  }
+  if (eventTs === current.eventTs && !current.eventId && nextEventId) {
+    params.roomWatermarks.set(roomId, { eventTs, eventId: nextEventId });
+  }
+}
+
+function hasOlderCommittedRoomEvent(params: {
+  roomWatermarks: Map<string, MatrixInboundRoomWatermark>;
+  roomId: string;
+  eventTs: number;
+}): boolean {
+  const roomId = normalizeRoomId(params.roomId);
+  const eventTs = normalizeEventTimestamp(params.eventTs);
+  if (!roomId || eventTs === null) {
+    return false;
+  }
+  const current = params.roomWatermarks.get(roomId);
+  return Boolean(current && eventTs < current.eventTs);
 }
 
 export async function createMatrixInboundEventDeduper(params: {
@@ -140,6 +222,7 @@ export async function createMatrixInboundEventDeduper(params: {
     });
 
   const seen = new Map<string, number>();
+  const roomWatermarks = new Map<string, MatrixInboundRoomWatermark>();
   const pending = new Set<string>();
   const persistLock = createAsyncLock();
 
@@ -156,6 +239,17 @@ export async function createMatrixInboundEventDeduper(params: {
       }
       seen.set(key, ts);
     }
+    for (const entry of stored?.roomWatermarks ?? []) {
+      if (!entry || typeof entry.roomId !== "string") {
+        continue;
+      }
+      updateRoomWatermark({
+        roomWatermarks,
+        roomId: entry.roomId,
+        eventTs: entry.eventTs,
+        eventId: entry.eventId,
+      });
+    }
     pruneSeenEvents({ seen, ttlMs, maxEntries, nowMs: nowMs() });
   } catch (err) {
     LogService.warn("MatrixInboundDedupe", "Failed loading Matrix inbound dedupe store:", err);
@@ -169,6 +263,7 @@ export async function createMatrixInboundEventDeduper(params: {
     dirty = false;
     const payload = toStoredState({
       seen,
+      roomWatermarks,
       ttlMs,
       maxEntries,
       nowMs: nowMs(),
@@ -229,7 +324,7 @@ export async function createMatrixInboundEventDeduper(params: {
       pending.add(key);
       return true;
     },
-    commitEvent: async ({ roomId, eventId }) => {
+    commitEvent: async ({ roomId, eventId, eventTs }) => {
       const key = buildEventKey({ roomId, eventId });
       if (!key) {
         return;
@@ -238,6 +333,7 @@ export async function createMatrixInboundEventDeduper(params: {
       const ts = nowMs();
       seen.delete(key);
       seen.set(key, ts);
+      updateRoomWatermark({ roomWatermarks, roomId, eventTs, eventId });
       pruneSeenEvents({ seen, ttlMs, maxEntries, nowMs: nowMs() });
       schedulePersist();
     },
@@ -248,6 +344,8 @@ export async function createMatrixInboundEventDeduper(params: {
       }
       pending.delete(key);
     },
+    isOlderThanCommittedWatermark: ({ roomId, eventTs }) =>
+      hasOlderCommittedRoomEvent({ roomWatermarks, roomId, eventTs }),
     flush,
     stop: async () => {
       try {

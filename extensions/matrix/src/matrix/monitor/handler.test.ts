@@ -1129,6 +1129,7 @@ describe("matrix monitor handler pairing account scope", () => {
 describe("matrix monitor handler durable inbound dedupe", () => {
   it("skips replayed inbound events before session recording", async () => {
     const inboundDeduper = {
+      isOlderThanCommittedWatermark: vi.fn(() => false),
       claimEvent: vi.fn(() => false),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
@@ -1161,6 +1162,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
   it("commits inbound events only after queued replies finish delivering", async () => {
     const callOrder: string[] = [];
     const inboundDeduper = {
+      isOlderThanCommittedWatermark: vi.fn(() => false),
       claimEvent: vi.fn(() => {
         callOrder.push("claim");
         return true;
@@ -1226,8 +1228,51 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
   });
 
+  it("drops stale pre-startup replay events older than the committed room watermark", async () => {
+    const inboundDeduper = {
+      isOlderThanCommittedWatermark: vi.fn(() => true),
+      claimEvent: vi.fn(() => true),
+      commitEvent: vi.fn(async () => undefined),
+      releaseEvent: vi.fn(),
+    };
+    const resolveAgentRoute = vi.fn(() => ({
+      agentId: "ops",
+      channel: "matrix",
+      accountId: "ops",
+      sessionKey: "agent:ops:main",
+      mainSessionKey: "agent:ops:main",
+      matchedBy: "binding.account" as const,
+    }));
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      resolveAgentRoute,
+      isDirectMessage: true,
+      startupMs: 1_000,
+      startupGraceMs: 0,
+      dropPreStartupMessages: false,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$stale-backlog",
+        body: "hello",
+        originServerTs: 900,
+      }),
+    );
+
+    expect(inboundDeduper.isOlderThanCommittedWatermark).toHaveBeenCalledWith({
+      roomId: "!room:example.org",
+      eventTs: 900,
+    });
+    expect(inboundDeduper.claimEvent).not.toHaveBeenCalled();
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(resolveAgentRoute).not.toHaveBeenCalled();
+  });
+
   it("releases a claimed event when reply dispatch fails before completion", async () => {
     const inboundDeduper = {
+      isOlderThanCommittedWatermark: vi.fn(() => false),
       claimEvent: vi.fn(() => true),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
@@ -1265,6 +1310,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
   it("releases a claimed event when queued final delivery fails", async () => {
     const inboundDeduper = {
+      isOlderThanCommittedWatermark: vi.fn(() => false),
       claimEvent: vi.fn(() => true),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
@@ -1314,6 +1360,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     "releases a claimed event when queued %s delivery fails and no final reply exists",
     async (kind) => {
       const inboundDeduper = {
+        isOlderThanCommittedWatermark: vi.fn(() => false),
         claimEvent: vi.fn(() => true),
         commitEvent: vi.fn(async () => undefined),
         releaseEvent: vi.fn(),
@@ -1367,6 +1414,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
   it("commits a claimed event when dispatch completes without a final reply", async () => {
     const callOrder: string[] = [];
     const inboundDeduper = {
+      isOlderThanCommittedWatermark: vi.fn(() => false),
       claimEvent: vi.fn(() => {
         callOrder.push("claim");
         return true;

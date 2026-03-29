@@ -125,6 +125,72 @@ describe("Matrix inbound event dedupe", () => {
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$backlog" })).toBe(false);
   });
 
+  it("persists per-room event watermarks for startup backlog fencing", async () => {
+    const storagePath = createStoragePath();
+    const first = await createMatrixInboundEventDeduper({
+      auth: auth as never,
+      storagePath,
+    });
+
+    expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$newer" })).toBe(true);
+    await first.commitEvent({
+      roomId: "!room:example.org",
+      eventId: "$newer",
+      eventTs: 200,
+    });
+    await first.stop();
+
+    const second = await createMatrixInboundEventDeduper({
+      auth: auth as never,
+      storagePath,
+    });
+
+    expect(
+      second.isOlderThanCommittedWatermark({
+        roomId: "!room:example.org",
+        eventTs: 199,
+      }),
+    ).toBe(true);
+    expect(
+      second.isOlderThanCommittedWatermark({
+        roomId: "!room:example.org",
+        eventTs: 200,
+      }),
+    ).toBe(false);
+    expect(
+      second.isOlderThanCommittedWatermark({
+        roomId: "!other:example.org",
+        eventTs: 199,
+      }),
+    ).toBe(false);
+  });
+
+  it("loads legacy v1 stores without requiring room watermarks", async () => {
+    const storagePath = createStoragePath();
+    fs.writeFileSync(
+      storagePath,
+      JSON.stringify({
+        version: 1,
+        entries: [{ key: "!room:example.org|$old", ts: 10 }],
+      }),
+      "utf8",
+    );
+
+    const deduper = await createMatrixInboundEventDeduper({
+      auth: auth as never,
+      storagePath,
+      nowMs: () => 10,
+    });
+
+    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$old" })).toBe(false);
+    expect(
+      deduper.isOlderThanCommittedWatermark({
+        roomId: "!room:example.org",
+        eventTs: 9,
+      }),
+    ).toBe(false);
+  });
+
   it("treats stop persistence failures as best-effort cleanup", async () => {
     const blockingPath = createStoragePath();
     fs.writeFileSync(blockingPath, "blocking file", "utf8");

@@ -78,7 +78,10 @@ export type MatrixMonitorHandlerParams = {
   startupMs: number;
   startupGraceMs: number;
   dropPreStartupMessages: boolean;
-  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claimEvent" | "commitEvent" | "releaseEvent">;
+  inboundDeduper?: Pick<
+    MatrixInboundEventDeduper,
+    "claimEvent" | "commitEvent" | "releaseEvent" | "isOlderThanCommittedWatermark"
+  >;
   directTracker: {
     isDirectMessage: (params: {
       roomId: string;
@@ -143,6 +146,21 @@ function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBo
     return "mentions";
   }
   return "off";
+}
+
+function isPreStartupMatrixEvent(params: {
+  eventTs: number | undefined;
+  eventAge: number | undefined;
+  startupMs: number;
+  startupGraceMs: number;
+}): boolean {
+  if (typeof params.eventTs === "number") {
+    return params.eventTs < params.startupMs - params.startupGraceMs;
+  }
+  if (typeof params.eventAge === "number") {
+    return params.eventAge > params.startupGraceMs;
+  }
+  return false;
 }
 
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
@@ -277,18 +295,26 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (!claimedInboundEvent || !inboundDeduper || !eventId) {
           return;
         }
-        await inboundDeduper.commitEvent({ roomId, eventId });
+        await inboundDeduper.commitEvent({ roomId, eventId, eventTs: eventTs ?? undefined });
         claimedInboundEvent = false;
       };
-      if (dropPreStartupMessages) {
-        if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
+      const isPreStartupEvent = isPreStartupMatrixEvent({
+        eventTs: typeof eventTs === "number" ? eventTs : undefined,
+        eventAge: typeof eventAge === "number" ? eventAge : undefined,
+        startupMs,
+        startupGraceMs,
+      });
+      if (isPreStartupEvent) {
+        if (dropPreStartupMessages) {
           return;
         }
         if (
-          typeof eventTs !== "number" &&
-          typeof eventAge === "number" &&
-          eventAge > startupGraceMs
+          typeof eventTs === "number" &&
+          inboundDeduper?.isOlderThanCommittedWatermark({ roomId, eventTs })
         ) {
+          logVerboseMessage(
+            `matrix: drop stale startup backlog room=${roomId} id=${eventId ?? "unknown"} ts=${eventTs}`,
+          );
           return;
         }
       }

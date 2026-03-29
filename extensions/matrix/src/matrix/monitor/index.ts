@@ -203,8 +203,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     accountConfig.streaming === true || accountConfig.streaming === "partial" ? "partial" : "off";
   const startupMs = Date.now();
   const startupGraceMs = 0;
-  // Cold starts should ignore old room history, but once we have a persisted
-  // /sync cursor we want restart backlogs to replay just like other channels.
+  // Cold starts should ignore old room history. Clean restarts may replay
+  // backlog, but the durable inbound deduper now fences out stale room history
+  // older than the latest committed event we already processed.
   const dropPreStartupMessages = !client.hasPersistedSyncState();
   const directTracker = createDirectRoomTracker(client, { log: logVerboseMessage });
   registerMatrixAutoJoin({ client, accountConfig, runtime });
