@@ -267,6 +267,11 @@ export async function processMessage(params: {
 
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
+  const replyToMode =
+    resolveWhatsAppAccount({
+      cfg: params.cfg,
+      accountId: params.route.accountId ?? params.msg.accountId,
+    }).replyToMode ?? "off";
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
     channel: "whatsapp",
@@ -421,6 +426,7 @@ export async function processMessage(params: {
         await deliverWebReply({
           replyResult: payload,
           msg: params.msg,
+          replyToMode,
           mediaLocalRoots,
           maxMediaBytes: params.maxMediaBytes,
           textLimit,

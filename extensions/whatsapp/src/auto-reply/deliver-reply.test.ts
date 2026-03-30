@@ -332,11 +332,12 @@ describe("deliverWebReply", () => {
       }),
     });
 
-    it("quotes every text chunk when replyToId is set", async () => {
+    it("quotes every text chunk when replyToMode is all", async () => {
       const msg = makeMsg();
       await deliverWebReply({
         replyResult: { text: "aaa bbb", replyToId: "msg-1" },
         msg,
+        replyToMode: "all",
         maxMediaBytes: 1024 * 1024,
         textLimit: 3,
         replyLogger,
@@ -345,6 +346,22 @@ describe("deliverWebReply", () => {
       expect(msg.reply).toHaveBeenCalledTimes(2);
       expect((msg.reply as ReturnType<typeof vi.fn>).mock.calls[0][1]).toEqual(expectedQuote);
       expect((msg.reply as ReturnType<typeof vi.fn>).mock.calls[1][1]).toEqual(expectedQuote);
+    });
+
+    it("quotes only the first text chunk when replyToMode is first", async () => {
+      const msg = makeMsg();
+      await deliverWebReply({
+        replyResult: { text: "aaa bbb", replyToId: "msg-1" },
+        msg,
+        replyToMode: "first",
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 3,
+        replyLogger,
+        skipLog: true,
+      });
+      expect(msg.reply).toHaveBeenCalledTimes(2);
+      expect((msg.reply as ReturnType<typeof vi.fn>).mock.calls[0][1]).toEqual(expectedQuote);
+      expect((msg.reply as ReturnType<typeof vi.fn>).mock.calls[1][1]).toBeUndefined();
     });
 
     it("preserves quote for text fallback when media send fails", async () => {
@@ -366,6 +383,30 @@ describe("deliverWebReply", () => {
       });
       expect(msg.reply).toHaveBeenCalled();
       expect((msg.reply as ReturnType<typeof vi.fn>).mock.calls[0][1]).toEqual(expectedQuote);
+    });
+
+    it("consumes the quote after the first successful media send in first mode", async () => {
+      const msg = makeMsg();
+      mockLoadedImageMedia();
+
+      await deliverWebReply({
+        replyResult: {
+          text: "aaaaaa",
+          mediaUrl: "http://example.com/img.jpg",
+          replyToId: "msg-1",
+        },
+        msg,
+        replyToMode: "first",
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 3,
+        replyLogger,
+        skipLog: true,
+      });
+
+      expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+      expect((msg.sendMedia as ReturnType<typeof vi.fn>).mock.calls[0][1]).toEqual(expectedQuote);
+      expect(msg.reply).toHaveBeenCalledTimes(1);
+      expect((msg.reply as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBeUndefined();
     });
 
     it("does not quote when replyToId is absent", async () => {
