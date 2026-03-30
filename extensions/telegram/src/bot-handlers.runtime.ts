@@ -1323,14 +1323,22 @@ export const registerTelegramHandlers = ({
       const runtimeCfg = telegramDeps.loadConfig();
       if (approvalCallback) {
         const isPluginApproval = approvalCallback.approvalId.startsWith("plugin:");
+        const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
+        const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
         const authorizedApprovalSender = isPluginApproval
-          ? isTelegramExecApprovalApprover({ cfg: runtimeCfg, accountId, senderId })
-          : isTelegramExecApprovalAuthorizedSender({ cfg: runtimeCfg, accountId, senderId });
-        if (
-          !authorizedApprovalSender
-        ) {
+          ? pluginApprovalAuthorizedSender
+          : execApprovalAuthorizedSender;
+        if (!authorizedApprovalSender) {
           logVerbose(
-            `Blocked telegram exec approval callback from ${senderId || "unknown"} (not authorized)`,
+            `Blocked telegram approval callback from ${senderId || "unknown"} (not authorized)`,
           );
           return;
         }
@@ -1342,13 +1350,16 @@ export const registerTelegramHandlers = ({
             approvalId: approvalCallback.approvalId,
             decision: approvalCallback.decision,
             senderId,
+            allowPluginFallback: pluginApprovalAuthorizedSender,
           });
         } catch (resolveErr) {
           const errStr = String(resolveErr);
           logVerbose(
             `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${errStr}`,
           );
-          await replyToCallbackChat(`❌ Failed to submit approval: ${errStr}`);
+          await replyToCallbackChat(
+            "❌ Failed to submit approval. Please try again or contact an admin.",
+          );
           return;
         }
         try {
