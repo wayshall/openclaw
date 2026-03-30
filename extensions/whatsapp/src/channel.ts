@@ -80,6 +80,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         sendPollWhatsApp: async (...args) =>
           await getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(...args),
         shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
+        resolveReplyToMode: ({ cfg, accountId }) =>
+          resolveWhatsAppAccount({ cfg, accountId }).replyToMode ?? "off",
         resolveTarget: ({ to, allowFrom, mode }) =>
           resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
       }),

@@ -1,5 +1,14 @@
+import {
+  chunkByParagraph,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../../auto-reply/chunk.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveOutboundSendDep } from "../../infra/outbound/send-deps.js";
-import { createAttachedChannelResultAdapter } from "../../plugin-sdk/channel-send-result.js";
+import {
+  attachChannelToResults,
+  createAttachedChannelResultAdapter,
+} from "../../plugin-sdk/channel-send-result.js";
 import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
 import { escapeRegExp, toWhatsappJid } from "../../utils.js";
 import type { ChannelOutboundAdapter } from "./types.js";
@@ -42,6 +51,10 @@ type CreateWhatsAppOutboundBaseParams = {
   sendPollWhatsApp: WhatsAppSendPoll;
   shouldLogVerbose: () => boolean;
   resolveTarget: ChannelOutboundAdapter["resolveTarget"];
+  resolveReplyToMode?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => "off" | "first" | "all";
   normalizeText?: (text: string | undefined) => string;
   skipEmptyText?: boolean;
 };
@@ -52,6 +65,7 @@ export function createWhatsAppOutboundBase({
   sendPollWhatsApp,
   shouldLogVerbose,
   resolveTarget,
+  resolveReplyToMode,
   normalizeText = (text) => text ?? "",
   skipEmptyText = false,
 }: CreateWhatsAppOutboundBaseParams): Pick<
@@ -62,10 +76,59 @@ export function createWhatsAppOutboundBase({
   | "textChunkLimit"
   | "pollMaxOptions"
   | "resolveTarget"
+  | "sendFormattedText"
   | "sendText"
   | "sendMedia"
   | "sendPoll"
 > {
+  const sendTextRaw = async ({
+    cfg,
+    to,
+    text,
+    accountId,
+    deps,
+    gifPlayback,
+    replyToId,
+  }: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0]) => {
+    const normalizedText = normalizeText(text);
+    if (skipEmptyText && !normalizedText) {
+      return { messageId: "" };
+    }
+    const send =
+      resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
+    return await send(to, normalizedText, {
+      verbose: false,
+      cfg,
+      accountId: accountId ?? undefined,
+      gifPlayback,
+      quotedMessageKey: resolveQuotedMessageKey(replyToId, to),
+    });
+  };
+
+  const sendMediaRaw = async ({
+    cfg,
+    to,
+    text,
+    mediaUrl,
+    mediaLocalRoots,
+    accountId,
+    deps,
+    gifPlayback,
+    replyToId,
+  }: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0]) => {
+    const send =
+      resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
+    return await send(to, normalizeText(text), {
+      verbose: false,
+      cfg,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId: accountId ?? undefined,
+      gifPlayback,
+      quotedMessageKey: resolveQuotedMessageKey(replyToId, to),
+    });
+  };
+
   return {
     deliveryMode: "gateway",
     chunker,
@@ -73,46 +136,59 @@ export function createWhatsAppOutboundBase({
     textChunkLimit: 4000,
     pollMaxOptions: 12,
     resolveTarget,
+    sendFormattedText: async ({ cfg, to, text, accountId, deps, gifPlayback, replyToId }) => {
+      const limit = resolveTextChunkLimit(cfg, "whatsapp", accountId ?? undefined, {
+        fallbackLimit: 4000,
+      });
+      if (limit === undefined) {
+        return attachChannelToResults("whatsapp", [
+          await sendTextRaw({ cfg, to, text, accountId, deps, gifPlayback, replyToId }),
+        ]);
+      }
+
+      const replyToMode = resolveReplyToMode?.({ cfg, accountId }) ?? "off";
+      let nextReplyToId = replyToId;
+      const results: Array<Awaited<ReturnType<typeof sendTextRaw>>> = [];
+      const sendChunk = async (chunk: string) => {
+        const result = await sendTextRaw({
+          cfg,
+          to,
+          text: chunk,
+          accountId,
+          deps,
+          gifPlayback,
+          replyToId: nextReplyToId,
+        });
+        results.push(result);
+        if (nextReplyToId && replyToMode === "first") {
+          nextReplyToId = undefined;
+        }
+      };
+
+      if (resolveChunkMode(cfg, "whatsapp", accountId ?? undefined) === "newline") {
+        const blocks = chunkByParagraph(text, limit);
+        const blockChunks = blocks.length > 0 ? blocks : text ? [text] : [];
+        for (const block of blockChunks) {
+          const chunks = chunker(block, limit);
+          const sendableChunks = chunks.length > 0 ? chunks : block ? [block] : [];
+          for (const chunk of sendableChunks) {
+            await sendChunk(chunk);
+          }
+        }
+        return attachChannelToResults("whatsapp", results);
+      }
+
+      const chunks = chunker(text, limit);
+      const sendableChunks = chunks.length > 0 ? chunks : text ? [text] : [];
+      for (const chunk of sendableChunks) {
+        await sendChunk(chunk);
+      }
+      return attachChannelToResults("whatsapp", results);
+    },
     ...createAttachedChannelResultAdapter({
       channel: "whatsapp",
-      sendText: async ({ cfg, to, text, accountId, deps, gifPlayback, replyToId }) => {
-        const normalizedText = normalizeText(text);
-        if (skipEmptyText && !normalizedText) {
-          return { messageId: "" };
-        }
-        const send =
-          resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
-        return await send(to, normalizedText, {
-          verbose: false,
-          cfg,
-          accountId: accountId ?? undefined,
-          gifPlayback,
-          quotedMessageKey: resolveQuotedMessageKey(replyToId, to),
-        });
-      },
-      sendMedia: async ({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId,
-        deps,
-        gifPlayback,
-        replyToId,
-      }) => {
-        const send =
-          resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
-        return await send(to, normalizeText(text), {
-          verbose: false,
-          cfg,
-          mediaUrl,
-          mediaLocalRoots,
-          accountId: accountId ?? undefined,
-          gifPlayback,
-          quotedMessageKey: resolveQuotedMessageKey(replyToId, to),
-        });
-      },
+      sendText: sendTextRaw,
+      sendMedia: sendMediaRaw,
       sendPoll: async ({ cfg, to, poll, accountId }) =>
         await sendPollWhatsApp(to, poll, {
           verbose: shouldLogVerbose(),

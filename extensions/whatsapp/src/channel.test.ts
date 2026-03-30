@@ -203,6 +203,56 @@ describe("whatsappPlugin outbound sendMedia", () => {
       }),
     );
   });
+
+  it("quotes only the first chunk on sendFormattedText when replyToMode is first", async () => {
+    const sendWhatsApp = vi.fn(
+      async (_to: string, _text: string, _options: { quotedMessageKey?: unknown }) => ({
+        messageId: "msg-1",
+        toJid: "15551234567@s.whatsapp.net",
+      }),
+    );
+
+    const outbound = whatsappPlugin.outbound;
+    if (!outbound?.sendFormattedText) {
+      throw new Error("whatsapp outbound sendFormattedText is unavailable");
+    }
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          replyToMode: "first",
+          textChunkLimit: 3,
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await outbound.sendFormattedText({
+      cfg,
+      to: "whatsapp:+15551234567",
+      text: "aaaaaa",
+      replyToId: "quoted-1",
+      accountId: "default",
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "whatsapp:+15551234567",
+      "aaa",
+      expect.objectContaining({
+        quotedMessageKey: expect.objectContaining({ id: "quoted-1" }),
+      }),
+    );
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      2,
+      "whatsapp:+15551234567",
+      "aaa",
+      expect.not.objectContaining({
+        quotedMessageKey: expect.anything(),
+      }),
+    );
+  });
 });
 
 describe("whatsappPlugin threading", () => {
