@@ -1,3 +1,4 @@
+import type { MiscMessageGenerationOptions } from "@whiskeysockets/baileys";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveOutboundMediaUrls,
@@ -81,12 +82,32 @@ export async function deliverWebReply(params: {
     throw lastErr;
   };
 
+  // Build Baileys quoted options from the payload-level replyToId set by the
+  // shared reply threading pipeline. The pipeline reads replyToMode from the
+  // WhatsApp threading adapter and controls which payloads get replyToId.
+  // Every chunk within a quoted payload is quoted.
+  const replyToId = replyResult.replyToId?.trim();
+  const quotedOptions: MiscMessageGenerationOptions | undefined =
+    replyToId && msg.chatId
+      ? ({
+          quoted: {
+            key: {
+              remoteJid: msg.chatId,
+              id: replyToId,
+              fromMe: msg.fromMe ?? false,
+              participant: msg.senderJid ?? undefined,
+            },
+            message: { conversation: msg.body || "" },
+          },
+        } as MiscMessageGenerationOptions)
+      : undefined;
+
   // Text-only replies
   if (mediaList.length === 0 && textChunks.length) {
     const totalChunks = textChunks.length;
     for (const [index, chunk] of textChunks.entries()) {
       const chunkStarted = Date.now();
-      await sendWithRetry(() => msg.reply(chunk), "text");
+      await sendWithRetry(() => msg.reply(chunk, quotedOptions), "text");
       if (!skipLog) {
         const durationMs = Date.now() - chunkStarted;
         whatsappOutboundLog.debug(
@@ -132,32 +153,28 @@ export async function deliverWebReply(params: {
       if (media.kind === "image") {
         await sendWithRetry(
           () =>
-            msg.sendMedia({
-              image: media.buffer,
-              caption,
-              mimetype: media.contentType,
-            }),
+            msg.sendMedia(
+              { image: media.buffer, caption, mimetype: media.contentType },
+              quotedOptions,
+            ),
           "media:image",
         );
       } else if (media.kind === "audio") {
         await sendWithRetry(
           () =>
-            msg.sendMedia({
-              audio: media.buffer,
-              ptt: true,
-              mimetype: media.contentType,
-              caption,
-            }),
+            msg.sendMedia(
+              { audio: media.buffer, ptt: true, mimetype: media.contentType, caption },
+              quotedOptions,
+            ),
           "media:audio",
         );
       } else if (media.kind === "video") {
         await sendWithRetry(
           () =>
-            msg.sendMedia({
-              video: media.buffer,
-              caption,
-              mimetype: media.contentType,
-            }),
+            msg.sendMedia(
+              { video: media.buffer, caption, mimetype: media.contentType },
+              quotedOptions,
+            ),
           "media:video",
         );
       } else {
@@ -165,12 +182,7 @@ export async function deliverWebReply(params: {
         const mimetype = media.contentType ?? "application/octet-stream";
         await sendWithRetry(
           () =>
-            msg.sendMedia({
-              document: media.buffer,
-              fileName,
-              caption,
-              mimetype,
-            }),
+            msg.sendMedia({ document: media.buffer, fileName, caption, mimetype }, quotedOptions),
           "media:document",
         );
       }
@@ -206,12 +218,12 @@ export async function deliverWebReply(params: {
         return;
       }
       whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);
-      await msg.reply(fallbackText);
+      await msg.reply(fallbackText, quotedOptions);
     },
   });
 
   // Remaining text chunks after media
   for (const chunk of remainingText) {
-    await msg.reply(chunk);
+    await msg.reply(chunk, quotedOptions);
   }
 }

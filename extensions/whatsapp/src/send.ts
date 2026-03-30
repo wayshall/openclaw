@@ -9,7 +9,11 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
-import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
+import {
+  type ActiveWebSendOptions,
+  type QuotedMessageKey,
+  requireActiveWebListener,
+} from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
@@ -24,6 +28,7 @@ export async function sendMessageWhatsApp(
     mediaLocalRoots?: readonly string[];
     gifPlayback?: boolean;
     accountId?: string;
+    quotedMessageKey?: QuotedMessageKey;
   },
 ): Promise<{ messageId: string; toJid: string }> {
   let text = body.trimStart();
@@ -88,10 +93,11 @@ export async function sendMessageWhatsApp(
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName
+      options.gifPlayback || accountId || documentFileName || options.quotedMessageKey
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
+            ...(options.quotedMessageKey ? { quotedMessageKey: options.quotedMessageKey } : {}),
             accountId,
           }
         : undefined;

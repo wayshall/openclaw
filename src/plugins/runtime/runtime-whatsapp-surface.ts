@@ -180,6 +180,13 @@ export type WhatsAppHeavyRuntimeModule = {
       mediaLocalRoots?: readonly string[];
       gifPlayback?: boolean;
       accountId?: string;
+      quotedMessageKey?: {
+        id: string;
+        remoteJid: string;
+        fromMe: boolean;
+        participant?: string;
+        body?: string;
+      };
     },
   ) => Promise<{ messageId: string; toJid: string }>;
   sendPollWhatsApp: (

@@ -66,6 +66,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
     pairing: {
       idLabel: "whatsappSenderId",
     },
+    threading: {
+      topLevelReplyToMode: "whatsapp",
+    },
     outbound: {
       ...createWhatsAppOutboundBase({
         chunker: chunkText,

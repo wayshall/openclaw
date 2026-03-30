@@ -1,7 +1,7 @@
 import { resolveOutboundSendDep } from "../../infra/outbound/send-deps.js";
 import { createAttachedChannelResultAdapter } from "../../plugin-sdk/channel-send-result.js";
 import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
-import { escapeRegExp } from "../../utils.js";
+import { escapeRegExp, toWhatsappJid } from "../../utils.js";
 import type { ChannelOutboundAdapter } from "./types.js";
 
 export const WHATSAPP_GROUP_INTRO_HINT =
@@ -63,18 +63,22 @@ export function createWhatsAppOutboundBase({
     resolveTarget,
     ...createAttachedChannelResultAdapter({
       channel: "whatsapp",
-      sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
+      sendText: async ({ cfg, to, text, accountId, deps, gifPlayback, replyToId }) => {
         const normalizedText = normalizeText(text);
         if (skipEmptyText && !normalizedText) {
           return { messageId: "" };
         }
         const send =
           resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
+        const quotedMessageKey = replyToId?.trim()
+          ? { id: replyToId.trim(), remoteJid: toWhatsappJid(to), fromMe: false }
+          : undefined;
         return await send(to, normalizedText, {
           verbose: false,
           cfg,
           accountId: accountId ?? undefined,
           gifPlayback,
+          quotedMessageKey,
         });
       },
       sendMedia: async ({
@@ -86,9 +90,13 @@ export function createWhatsAppOutboundBase({
         accountId,
         deps,
         gifPlayback,
+        replyToId,
       }) => {
         const send =
           resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
+        const quotedMessageKey = replyToId?.trim()
+          ? { id: replyToId.trim(), remoteJid: toWhatsappJid(to), fromMe: false }
+          : undefined;
         return await send(to, normalizeText(text), {
           verbose: false,
           cfg,
@@ -96,6 +104,7 @@ export function createWhatsAppOutboundBase({
           mediaLocalRoots,
           accountId: accountId ?? undefined,
           gifPlayback,
+          quotedMessageKey,
         });
       },
       sendPoll: async ({ cfg, to, poll, accountId }) =>
