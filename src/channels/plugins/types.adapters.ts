@@ -182,6 +182,10 @@ export type ChannelOutboundAdapter = {
     accountId?: string | null;
     fallbackLimit?: number;
   }) => number | undefined;
+  consumeReplyToAfterFirstMediaSend?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => boolean;
   shouldSuppressLocalPayloadPrompt?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;

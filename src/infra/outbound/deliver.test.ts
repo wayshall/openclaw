@@ -11,6 +11,7 @@ import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginHookRegistration } from "../../plugins/types.js";
+import { loadBundledPluginTestApiSync } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
@@ -103,6 +104,9 @@ const expectedResolvedTmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
 type DeliverOutboundArgs = Parameters<DeliverModule["deliverOutboundPayloads"]>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
 type DeliverSession = DeliverOutboundArgs["session"];
+const { whatsappPlugin } = loadBundledPluginTestApiSync<{
+  whatsappPlugin: { id: string; outbound: NonNullable<typeof whatsappOutbound> };
+}>("whatsapp");
 
 async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
@@ -299,6 +303,60 @@ describe("deliverOutboundPayloads", () => {
         expect(call[2]).toEqual(expect.objectContaining({ replyToMessageId: 777 }));
       }
     });
+  });
+
+  it("quotes only the first outbound whatsapp media item when replyToMode is first", async () => {
+    const sendWhatsApp = vi.fn(
+      async (_to: string, _text: string, _options: { quotedMessageKey?: unknown }) => ({
+        messageId: "w1",
+        toJid: "jid",
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { replyToMode: "first" } },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          plugin: whatsappPlugin,
+          source: "test://whatsapp-plugin",
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [
+        {
+          text: "caption",
+          mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+          replyToId: "quoted-1",
+        },
+      ],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "caption",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/1.jpg",
+        quotedMessageKey: expect.objectContaining({ id: "quoted-1" }),
+      }),
+    );
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      2,
+      "+1555",
+      "",
+      expect.not.objectContaining({
+        quotedMessageKey: expect.anything(),
+      }),
+    );
   });
 
   it("passes explicit accountId to sendTelegram", async () => {

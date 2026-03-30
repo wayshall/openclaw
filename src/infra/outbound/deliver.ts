@@ -70,6 +70,7 @@ type ChannelHandler = {
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   supportsMedia: boolean;
+  consumeReplyToAfterFirstMediaSend: boolean;
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
   shouldSkipPlainTextSanitization?: (payload: ReplyPayload) => boolean;
   resolveEffectiveTextChunkLimit?: (fallbackLimit?: number) => number | undefined;
@@ -177,6 +178,11 @@ function createPluginHandler(
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
     supportsMedia: Boolean(sendMedia),
+    consumeReplyToAfterFirstMediaSend:
+      outbound.consumeReplyToAfterFirstMediaSend?.({
+        cfg: params.cfg,
+        accountId: params.accountId ?? undefined,
+      }) ?? false,
     normalizePayload: outbound.normalizePayload
       ? (payload) => outbound.normalizePayload!({ payload })
       : undefined,
@@ -745,24 +751,37 @@ async function deliverOutboundPayloadsCore(
       }
 
       let lastMessageId: string | undefined;
+      let nextReplyToId = sendOverrides.replyToId;
       await sendMediaWithLeadingCaption({
         mediaUrls: payloadSummary.mediaUrls,
         caption: payloadSummary.text,
         send: async ({ mediaUrl, caption }) => {
           throwIfAborted(abortSignal);
+          const mediaOverrides = handler.consumeReplyToAfterFirstMediaSend
+            ? {
+                ...sendOverrides,
+                replyToId: nextReplyToId,
+              }
+            : sendOverrides;
           if (handler.sendFormattedMedia) {
             const delivery = await handler.sendFormattedMedia(
               caption ?? "",
               mediaUrl,
-              sendOverrides,
+              mediaOverrides,
             );
             results.push(delivery);
             lastMessageId = delivery.messageId;
+            if (handler.consumeReplyToAfterFirstMediaSend && nextReplyToId) {
+              nextReplyToId = undefined;
+            }
             return;
           }
-          const delivery = await handler.sendMedia(caption ?? "", mediaUrl, sendOverrides);
+          const delivery = await handler.sendMedia(caption ?? "", mediaUrl, mediaOverrides);
           results.push(delivery);
           lastMessageId = delivery.messageId;
+          if (handler.consumeReplyToAfterFirstMediaSend && nextReplyToId) {
+            nextReplyToId = undefined;
+          }
         },
       });
       emitMessageSent({

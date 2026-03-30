@@ -73,6 +73,7 @@ export function createWhatsAppOutboundBase({
   | "deliveryMode"
   | "chunker"
   | "chunkerMode"
+  | "consumeReplyToAfterFirstMediaSend"
   | "textChunkLimit"
   | "pollMaxOptions"
   | "resolveTarget"
@@ -81,6 +82,9 @@ export function createWhatsAppOutboundBase({
   | "sendMedia"
   | "sendPoll"
 > {
+  const resolveEffectiveReplyToMode = (cfg: OpenClawConfig, accountId?: string | null) =>
+    resolveReplyToMode?.({ cfg, accountId }) ?? "off";
+
   const sendTextRaw = async ({
     cfg,
     to,
@@ -133,6 +137,8 @@ export function createWhatsAppOutboundBase({
     deliveryMode: "gateway",
     chunker,
     chunkerMode: "text",
+    consumeReplyToAfterFirstMediaSend: ({ cfg, accountId }) =>
+      resolveEffectiveReplyToMode(cfg, accountId) === "first",
     textChunkLimit: 4000,
     pollMaxOptions: 12,
     resolveTarget,
@@ -146,7 +152,7 @@ export function createWhatsAppOutboundBase({
         ]);
       }
 
-      const replyToMode = resolveReplyToMode?.({ cfg, accountId }) ?? "off";
+      const replyToMode = resolveEffectiveReplyToMode(cfg, accountId);
       let nextReplyToId = replyToId;
       const results: Array<Awaited<ReturnType<typeof sendTextRaw>>> = [];
       const sendChunk = async (chunk: string) => {
